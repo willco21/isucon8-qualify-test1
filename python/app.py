@@ -95,21 +95,80 @@ def teardown(error):
         flask.g.db.close()
 
 
-def get_events(filter=lambda e: True):
+def get_events(public_fg = False):#filter=lambda e: True):
     conn = dbh()
-    conn.autocommit(False)
+    #conn.autocommit(False)
     cur = conn.cursor()
     try:
-        cur.execute("SELECT * FROM events ORDER BY id ASC")
+        #cur.execute("SELECT * FROM events ORDER BY id ASC")
+        if public_fg:
+          query = """
+          select count(*) as res_count,
+            e.id as event_id,
+            s.`rank`,
+            e.id,
+            e.title,
+            e.public_fg,
+            e.closed_fg,
+            e.price
+          from events e
+            left outer join reservations r on e.id = r.event_id
+            AND r.canceled_at is NULL
+            left outer join sheets s on r.sheet_id = s.id
+          where e.public_fg = 1
+          GROUP BY e.id,
+            s.`rank`
+          """
+        else:
+          query = """
+          select count(*) as res_count,
+            e.id as event_id,
+            s.`rank`,
+            e.id,
+            e.title,
+            e.public_fg,
+            e.closed_fg,
+            e.price
+          from events e
+            left outer join reservations r on e.id = r.event_id
+            AND r.canceled_at is NULL
+            left outer join sheets s on r.sheet_id = s.id
+          GROUP BY e.id,
+            s.`rank`
+          """
+        cur.execute(query)
         rows = cur.fetchall()
-        event_ids = [row['id'] for row in rows if filter(row)]
+        #event_ids = [row['id'] for row in rows if filter(row)]
         events = []
-        for event_id in event_ids:
-            event = get_event(event_id)
-            for sheet in event['sheets'].values():
-                del sheet['detail']
-            events.append(event)
-        conn.commit()
+        start = 0
+        for row in rows:
+          if row['rank'] is None or start < row['event_id']:
+            tmp = {
+              "id": row["id"],
+              "title": row["title"],
+              "public": True if row['public_fg'] else False,
+              "closed": True if row['closed_fg'] else False,
+              "price": row["price"],
+              "total": 1000,
+              "remains": 1000,
+              "sheets": {
+                "S": {'total': 50, 'remains': 50, 'price': row['price'] + 5000},
+                "A": {'total': 150, 'remains': 150, 'price': row['price'] + 3000},
+                "B": {'total': 300, 'remains': 300, 'price': row['price'] + 1000},
+                "C": {'total': 500, 'remains': 500, 'price': row['price']},
+              }
+            }
+            events.append(tmp)
+          if row['rank'] is not None:
+            start = row['event_id']
+            events[-1]['sheets'][row['rank']]['remains'] -= row['res_count']
+            events[-1]['remains'] -= row['res_count']
+        #for event_id in event_ids:
+        #    event = get_event(event_id)
+        #    for sheet in event['sheets'].values():
+        #        del sheet['detail']
+        #    events.append(event)
+        #conn.commit()
     except MySQLdb.Error as e:
         conn.rollback()
         raise e
@@ -122,10 +181,9 @@ def get_event(event_id, login_user_id=None):
     event = cur.fetchone()
     if not event: return None
 
-    event["total"] = 0
+    event["total"] = 1000
     event["remains"] = 0
     event["sheets"] = {}
-    event['total'] = 1000
     for rank, l in {"S": [50, 5000], "A": [150, 3000], "B": [300, 1000], "C": [500, 0]}.items():
         event["sheets"][rank] = {'total': l[0], 'remains': 0, 'detail': [], 'price': event['price'] + l[1]}
 
@@ -240,7 +298,8 @@ def render_report_csv(reports):
 def get_index():
     user = get_login_user()
     events = []
-    for event in get_events(lambda e: e["public_fg"]):
+    #for event in get_events(lambda e: e["public_fg"]):
+    for event in get_events(True):
         events.append(sanitize_event(event))
     return flask.render_template('index.html', user=user, events=events, base_url=make_base_url(flask.request))
 
@@ -364,7 +423,8 @@ def post_logout():
 @app.route('/api/events')
 def get_events_api():
     events = []
-    for event in get_events(lambda e: e["public_fg"]):
+    #for event in get_events(lambda e: e["public_fg"]):
+    for event in get_events(True):
         events.append(sanitize_event(event))
     return jsonify(events)
 
@@ -581,7 +641,7 @@ def get_admin_event_sales(event_id):
 
     cur = dbh().cursor()
     reservations = cur.execute("""
-    SELECT 
+    SELECT
         r.id as reservation_id
         ,e.id    AS event_id
         ,s.rank  AS rank
@@ -599,7 +659,7 @@ def get_admin_event_sales(event_id):
     INNER JOIN events e
     ON e.id = r.event_id
     WHERE r.event_id = {0}
-    ORDER BY reserved_at ASC FOR UPDATE 
+    ORDER BY reserved_at ASC FOR UPDATE
     """.format(event['id']))
     reservations = cur.fetchall()
     #reports = []
@@ -627,7 +687,7 @@ def get_admin_event_sales(event_id):
 def get_admin_sales():
     cur = dbh().cursor()
     reservations = cur.execute('''
-    SELECT 
+    SELECT
         r.id as reservation_id
         ,e.id    AS event_id
         ,s.rank  AS rank
@@ -665,6 +725,15 @@ def get_admin_sales():
 #        })
     return render_report_csv(reservations)
 
+#from wsgi_lineprof.middleware import LineProfilerMiddleware
+#from wsgi_lineprof.filters import FilenameFilter, TotalTimeSorter
+#f=open("/home/isucon/profile.log", "a")
+#filters = [
+#    FilenameFilter("/home/isucon/torb/webapp/python/app.py"),  # プロファイル対象のファイル名指定
+#    lambda stats: filter(lambda stat: stat.total_time > 0.01, stats), # 0.01未満の結果を表示しない
+#]
+#app = LineProfilerMiddleware(app, stream=f, filters=filters)
+#
 
 if __name__ == "__main__":
     app.run(port=8080, debug=False, threaded=True)
