@@ -589,9 +589,9 @@ def get_admin_event_sales(event_id):
         ,r.user_id as user_id
         ,(CASE
             WHEN NULL THEN ''
-            ELSE DATE_FORMAT(r.canceled_at, '%Y-%m-%dZ')
+            ELSE DATE_FORMAT(r.canceled_at, '%Y-%m-%dT%H:%i:%s.%fZ')
             END )as canceled_at
-        ,DATE_FORMAT(r.reserved_at, '%Y-%m-%dZ') as sold_at
+        ,DATE_FORMAT(r.reserved_at, '%Y-%m-%dT%H:%i:%s.%fZ') as sold_at
         ,e.price + s.price AS price
     FROM reservations r
     INNER JOIN sheets s
@@ -635,9 +635,9 @@ def get_admin_sales():
         ,r.user_id as user_id
         ,(CASE
             WHEN NULL THEN ''
-            ELSE DATE_FORMAT(r.canceled_at, '%Y-%m-%dZ')
+            ELSE DATE_FORMAT(r.canceled_at, '%Y-%m-%dT%H:%i:%s.%fZ')
             END )as canceled_at
-        ,DATE_FORMAT(r.reserved_at, '%Y-%m-%dZ') as sold_at
+        ,DATE_FORMAT(r.reserved_at, '%Y-%m-%dT%H:%i:%s.%fZ') as sold_at
         ,e.price + s.price AS price
     FROM reservations r
     INNER JOIN sheets s
