@@ -580,54 +580,91 @@ def get_admin_event_sales(event_id):
     event = get_event(event_id)
 
     cur = dbh().cursor()
-    reservations = cur.execute(
-        'SELECT r.*, s.rank AS sheet_rank, s.num AS sheet_num, s.price AS sheet_price, e.price AS event_price FROM reservations r INNER JOIN sheets s ON s.id = r.sheet_id INNER JOIN events e ON e.id = r.event_id WHERE r.event_id = %s ORDER BY reserved_at ASC FOR UPDATE',
-        [event['id']])
+    reservations = cur.execute("""
+    SELECT 
+        r.id as reservation_id
+        ,e.id    AS event_id
+        ,s.rank  AS rank
+        ,s.num   AS num
+        ,r.user_id as user_id
+        ,(CASE
+            WHEN NULL THEN ''
+            ELSE DATE_FORMAT(r.canceled_at, '%Y-%m-%dZ')
+            END )as canceled_at
+        ,DATE_FORMAT(r.reserved_at, '%Y-%m-%dZ') as sold_at
+        ,e.price + s.price AS price
+    FROM reservations r
+    INNER JOIN sheets s
+    ON s.id = r.sheet_id
+    INNER JOIN events e
+    ON e.id = r.event_id
+    WHERE r.event_id = {0}
+    ORDER BY reserved_at ASC FOR UPDATE 
+    """.format(event['id']))
     reservations = cur.fetchall()
-    reports = []
+    #reports = []
 
-    for reservation in reservations:
-        if reservation['canceled_at']:
-            canceled_at = reservation['canceled_at'].isoformat()+"Z"
-        else: canceled_at = ''
-        reports.append({
-            "reservation_id": reservation['id'],
-            "event_id":       event['id'],
-            "rank":           reservation['sheet_rank'],
-            "num":            reservation['sheet_num'],
-            "user_id":        reservation['user_id'],
-            "sold_at":        reservation['reserved_at'].isoformat()+"Z",
-            "canceled_at":    canceled_at,
-            "price":          reservation['event_price'] + reservation['sheet_price'],
-        })
+#    for reservation in reservations:
+#        if reservation['canceled_at']:
+#            canceled_at = reservation['canceled_at'].isoformat()+"Z"
+#        else: canceled_at = ''
+#        reports.append({
+#            "reservation_id": reservation['id'],
+#            "event_id":       event['id'],
+#            "rank":           reservation['sheet_rank'],
+#            "num":            reservation['sheet_num'],
+#            "user_id":        reservation['user_id'],
+#            "sold_at":        reservation['reserved_at'].isoformat()+"Z",
+#            "canceled_at":    canceled_at,
+#            "price":          reservation['event_price'] + reservation['sheet_price'],
+#        })
 
-    return render_report_csv(reports)
+    return render_report_csv(reservations)
 
 
 @app.route('/admin/api/reports/sales')
 @admin_login_required
 def get_admin_sales():
     cur = dbh().cursor()
-    reservations = cur.execute('SELECT r.*, s.rank AS sheet_rank, s.num AS sheet_num, s.price AS sheet_price, e.id AS event_id, e.price AS event_price FROM reservations r INNER JOIN sheets s ON s.id = r.sheet_id INNER JOIN events e ON e.id = r.event_id ORDER BY reserved_at ASC FOR UPDATE')
+    reservations = cur.execute('''
+    SELECT 
+        r.id as reservation_id
+        ,e.id    AS event_id
+        ,s.rank  AS rank
+        ,s.num   AS num
+        ,r.user_id as user_id
+        ,(CASE
+            WHEN NULL THEN ''
+            ELSE DATE_FORMAT(r.canceled_at, '%Y-%m-%dZ')
+            END )as canceled_at
+        ,DATE_FORMAT(r.reserved_at, '%Y-%m-%dZ') as sold_at
+        ,e.price + s.price AS price
+    FROM reservations r
+    INNER JOIN sheets s
+    ON s.id = r.sheet_id
+    INNER JOIN events e
+    ON e.id = r.event_id
+    ORDER BY reserved_at ASC FOR UPDATE
+    ''')
     reservations = cur.fetchall()
 
-    reports = []
-    for reservation in reservations:
-        if reservation['canceled_at']:
-            canceled_at = reservation['canceled_at'].isoformat()+"Z"
-        else: canceled_at = ''
-        reports.append({
-            "reservation_id": reservation['id'],
-            "event_id":       reservation['event_id'],
-            "rank":           reservation['sheet_rank'],
-            "num":            reservation['sheet_num'],
-            "user_id":        reservation['user_id'],
-            "sold_at":        reservation['reserved_at'].isoformat()+"Z",
-            "canceled_at":    canceled_at,
-            "price":          reservation['event_price'] + reservation['sheet_price'],
-        })
-    return render_report_csv(reports)
+#    reports = []
+#    for reservation in reservations:
+#        if reservation['canceled_at']:
+#            canceled_at = reservation['canceled_at'].isoformat()+"Z"
+#        else: canceled_at = ''
+#        reports.append({
+#            "reservation_id": reservation['id'],
+#            "event_id":       reservation['event_id'],
+#            "rank":           reservation['sheet_rank'],
+#            "num":            reservation['sheet_num'],
+#            "user_id":        reservation['user_id'],
+#            "sold_at":        reservation['reserved_at'].isoformat()+"Z",
+#            "canceled_at":    canceled_at,
+#            "price":          reservation['event_price'] + reservation['sheet_price'],
+#        })
+    return render_report_csv(reservations)
 
 
 if __name__ == "__main__":
-    app.run(port=8080, debug=True, threaded=True)
+    app.run(port=8080, debug=False, threaded=True)
