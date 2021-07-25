@@ -32,6 +32,14 @@ CREATE TABLE IF NOT EXISTS reservations (
     KEY event_id_and_sheet_id_idx (event_id, sheet_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
+CREATE TABLE IF NOT EXISTS sheet_reservations (
+    id          INTEGER UNSIGNED PRIMARY KEY AUTO_INCREMENT,
+    event_id    INTEGER UNSIGNED NOT NULL,
+    sheet_id    INTEGER UNSIGNED NOT NULL,
+    reserved    INTEGER UNSIGNED DEFAULT 0,
+    KEY event_id_and_sheet_id_idx (event_id, sheet_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
 CREATE TABLE IF NOT EXISTS administrators (
     id          INTEGER UNSIGNED PRIMARY KEY AUTO_INCREMENT,
     nickname    VARCHAR(128) NOT NULL,
@@ -41,3 +49,5 @@ CREATE TABLE IF NOT EXISTS administrators (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 alter table reservations add index user_id_key(user_id);
+alter table reservations add index canceled_at_idx(canceled_at);
+alter table reservations add index event_id_canceled_at_idx(event_id, canceled_at);
