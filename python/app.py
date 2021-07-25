@@ -288,9 +288,9 @@ def render_report_csv(reports, prefix):
     #res.data = f.getvalue()
     #res.headers['Content-Type'] = 'text/csv'
     #res.headers['Content-Disposition'] = 'attachment; filename=report.csv'
-
+    subprocess.call("/usr/bin/scp -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i /home/isucon/.ssh/id_rsa_isucon isucon@172.31.21.46:/var/lib/mysql/torb/{}_report.csv /tmp/".format(prefix).split())
     downloadFileName = 'report.csv'
-    downloadFile = '/var/lib/mysql/torb/{}_report.csv'.format(prefix)
+    downloadFile = '/tmp/{}_report.csv'.format(prefix)
 
     return flask.send_file(downloadFile, as_attachment = True, \
         attachment_filename = downloadFileName, \

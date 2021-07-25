@@ -41,3 +41,4 @@ CREATE TABLE IF NOT EXISTS administrators (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 alter table reservations add index user_id_key(user_id);
+alter table reservations add index canceled_at_idx(canceled_at);
