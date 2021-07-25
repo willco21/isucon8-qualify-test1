@@ -9,6 +9,7 @@ import subprocess
 from io import StringIO
 import csv
 from datetime import datetime, timezone
+import uuid
 
 
 base_path = pathlib.Path(__file__).resolve().parent.parent
@@ -95,74 +96,50 @@ def teardown(error):
         flask.g.db.close()
 
 
-def get_events(public_fg = False):#filter=lambda e: True):
+def get_events(filter=lambda e: True):
     conn = dbh()
-    #conn.autocommit(False)
+    conn.autocommit(False)
+
     cur = conn.cursor()
     try:
-        #cur.execute("SELECT * FROM events ORDER BY id ASC")
-        if public_fg:
-          query = """
-          select count(*) as res_count,
-            e.id as event_id,
-            s.`rank`,
-            e.id,
-            e.title,
-            e.public_fg,
-            e.closed_fg,
-            e.price
-          from events e
-            left outer join reservations r on e.id = r.event_id
-            AND r.canceled_at is NULL
-            left outer join sheets s on r.sheet_id = s.id
-          where e.public_fg = 1
-          GROUP BY e.id,
-            s.`rank`
-          """
-        else:
-          query = """
-          select count(*) as res_count,
-            e.id as event_id,
-            s.`rank`,
-            e.id,
-            e.title,
-            e.public_fg,
-            e.closed_fg,
-            e.price
-          from events e
-            left outer join reservations r on e.id = r.event_id
-            AND r.canceled_at is NULL
-            left outer join sheets s on r.sheet_id = s.id
-          GROUP BY e.id,
-            s.`rank`
-          """
-        cur.execute(query)
+        cur.execute("SELECT * FROM events ORDER BY id ASC")
         rows = cur.fetchall()
-        #event_ids = [row['id'] for row in rows if filter(row)]
-        events = []
-        start = 0
-        for row in rows:
-          if row['rank'] is None or start < row['event_id']:
-            tmp = {
-              "id": row["id"],
-              "title": row["title"],
-              "public": True if row['public_fg'] else False,
-              "closed": True if row['closed_fg'] else False,
-              "price": row["price"],
-              "total": 1000,
-              "remains": 1000,
-              "sheets": {
-                "S": {'total': 50, 'remains': 50, 'price': row['price'] + 5000},
-                "A": {'total': 150, 'remains': 150, 'price': row['price'] + 3000},
-                "B": {'total': 300, 'remains': 300, 'price': row['price'] + 1000},
-                "C": {'total': 500, 'remains': 500, 'price': row['price']},
-              }
-            }
-            events.append(tmp)
-          if row['rank'] is not None:
-            start = row['event_id']
-            events[-1]['sheets'][row['rank']]['remains'] -= row['res_count']
-            events[-1]['remains'] -= row['res_count']
+        events = [row for row in rows if filter(row)]
+
+        cur.execute("""
+        select count(*) as res_count, r.event_id, s.rank
+        from reservations r
+        join sheets s on r.sheet_id = s.id
+        where r.canceled_at IS NULL
+        GROUP BY r.event_id, s.`rank`;
+        """)
+        res_counts = cur.fetchall()
+        res_counts_by_event_id_and_rank = {}
+
+        for res_count in res_counts:
+          res_counts_by_event_id_and_rank[(res_count["event_id"], res_count["rank"])] = res_count["res_count"]
+
+        for event in events:
+          s_reserve = res_counts_by_event_id_and_rank[(event["id"], "S")] if (event["id"], "S") in res_counts_by_event_id_and_rank else 0
+          a_reserve = res_counts_by_event_id_and_rank[(event["id"], "A")] if (event["id"], "A") in res_counts_by_event_id_and_rank else 0
+          b_reserve = res_counts_by_event_id_and_rank[(event["id"], "B")] if (event["id"], "B") in res_counts_by_event_id_and_rank else 0
+          c_reserve = res_counts_by_event_id_and_rank[(event["id"], "C")] if (event["id"], "C") in res_counts_by_event_id_and_rank else 0
+          event["total"] = 1000
+          event["remains"] = 1000 - (s_reserve + a_reserve + b_reserve + c_reserve)
+          event["sheets"] = {}
+          event["sheets"] = {
+          "S": {'total': 50, 'remains': 50 -s_reserve,  'price': event['price'] + 5000},
+          "A": {'total': 150, 'remains': 150 - a_reserve, 'price': event['price'] + 3000},
+          "B": {'total': 300, 'remains': 300 - b_reserve,  'price': event['price'] + 1000},
+          "C": {'total': 500, 'remains': 500 - c_reserve,  'price': event['price']},
+          }
+          event['public'] = True if event['public_fg'] else False
+          event['closed'] = True if event['closed_fg'] else False
+          del event['public_fg']
+          del event['closed_fg']
+
+
+        #events = []
         #for event_id in event_ids:
         #    event = get_event(event_id)
         #    for sheet in event['sheets'].values():
@@ -172,6 +149,8 @@ def get_events(public_fg = False):#filter=lambda e: True):
     except MySQLdb.Error as e:
         conn.rollback()
         raise e
+    #print("return events:")
+    #print(events)
     return events
 
 
@@ -179,24 +158,43 @@ def get_event(event_id, login_user_id=None):
     cur = dbh().cursor()
     cur.execute("SELECT * FROM events WHERE id = %s", [event_id])
     event = cur.fetchone()
+    #print("initial event:")
+    #print(event)
     if not event: return None
 
     event["total"] = 1000
     event["remains"] = 0
     event["sheets"] = {}
-    for rank, l in {"S": [50, 5000], "A": [150, 3000], "B": [300, 1000], "C": [500, 0]}.items():
-        event["sheets"][rank] = {'total': l[0], 'remains': 0, 'detail': [], 'price': event['price'] + l[1]}
+    event["sheets"] = {
+        "S": {'total': 50, 'remains': 0, 'detail': [], 'price': event['price'] + 5000},
+        "A": {'total': 150, 'remains': 0, 'detail': [], 'price': event['price'] + 3000},
+        "B": {'total': 300, 'remains': 0, 'detail': [], 'price': event['price'] + 1000},
+        "C": {'total': 500, 'remains': 0, 'detail': [], 'price': event['price']},
+        }
+    #for rank in ["S", "A", "B", "C"]:
+    #    event["sheets"][rank] = {'total': 0, 'remains': 0, 'detail': []}
 
     #cur.execute("SELECT * FROM sheets ORDER BY `rank`, num")
+    # event.id, event.title, event.price, event.public_fg, event.closed_fg, (event.total), (event.remains), sheets.num, (sheet.total), (sheet.remain), (sheet.reserved), (sheet.mine), reservation.reserved_at
     cur.execute("""
-SELECT s.rank, s.num, r.id as r_id, r.user_id, r.reserved_at as r_tmp_reserved_at
-FROM sheets s
-  left outer join reservations r on r.sheet_id = s.id
-  AND r.event_id = %s
-  AND r.canceled_at is NULL
-ORDER BY s.`rank`, s.num;
-    """,[event['id']])
+    SELECT *
+    FROM sheets s
+    left outer join reservations r on s.id = r.sheet_id
+    where
+      r.event_id = %s
+      AND r.canceled_at IS NULL
+    GROUP BY r.event_id, r.sheet_id HAVING r.reserved_at = MIN(r.reserved_at)
+    ORDER BY s.`rank`,s.num
+    """,[event["id"]])
+    temp_reservations = cur.fetchall()
+    reservations = {}
+
+    for r in temp_reservations:
+      reservations[r["sheet_id"]] = r
+
+    cur.execute("SELECT * FROM sheets ORDER BY `rank`, num")
     sheets = cur.fetchall()
+
     for sheet in sheets:
         #if not event['sheets'][sheet['rank']].get('price'):
         #    event['sheets'][sheet['rank']]['price'] = event['price'] + sheet['price']
@@ -204,40 +202,40 @@ ORDER BY s.`rank`, s.num;
         #event['sheets'][sheet['rank']]['total'] += 1
 
         #cur.execute(
-        #    "SELECT * FROM reservations WHERE event_id = %s AND sheet_id = %s AND canceled_at IS NULL GROUP BY event_id, sheet_id HAVING reserved_at = MIN(reserved_at)",
+        #    "SELECT * FROM reservations WHERE event_id = %s AND sheet_id = %s AND canceled_at #IS NULL GROUP BY event_id, sheet_id HAVING reserved_at = MIN(reserved_at)",
         #    [event['id'], sheet['id']])
         #reservation = cur.fetchone()
-        if sheet["r_id"]:
-            if login_user_id and sheet['user_id'] == login_user_id:
+
+        ##event['remains'] -= 1
+        ##event['sheets'][sheet['rank']]['remains'] -= 1
+        ##if login_user_id and sheet['user_id'] == login_user_id:
+        ##  sheet['mine'] = True
+        ##sheet['reserved'] = True
+        ##sheet['reserved_at'] = int(sheet['reserved_at'].replace(tzinfo=timezone.utc).timestamp())
+        ##event['sheets'][sheet['rank']]['detail'].append(sheet)
+
+        if sheet["id"] in reservations:
+            if login_user_id and reservations[sheet["id"]]['user_id'] == login_user_id:
                 sheet['mine'] = True
             sheet['reserved'] = True
-            sheet['reserved_at'] = int(sheet['r_tmp_reserved_at'].replace(tzinfo=timezone.utc).timestamp())
+            sheet['reserved_at'] = int(reservations[sheet["id"]]['reserved_at'].replace(tzinfo=timezone.utc).timestamp())
         else:
             event['remains'] += 1
             event['sheets'][sheet['rank']]['remains'] += 1
-        #if reservation:
-        #    if login_user_id and reservation['user_id'] == login_user_id:
-        #        sheet['mine'] = True
-        #    sheet['reserved'] = True
-        #    sheet['reserved_at'] = int(reservation['reserved_at'].replace(tzinfo=timezone.utc).timestamp())
-        #else:
-        #    event['remains'] += 1
-        #    event['sheets'][sheet['rank']]['remains'] += 1
 
         event['sheets'][sheet['rank']]['detail'].append(sheet)
 
-        #del sheet['id']
-        #del sheet['price']
+        del sheet['id']
+        del sheet['price']
         del sheet['rank']
-
-        del sheet['r_id']
-        del sheet['r_tmp_reserved_at']
-        del sheet['user_id']
 
     event['public'] = True if event['public_fg'] else False
     event['closed'] = True if event['closed_fg'] else False
     del event['public_fg']
     del event['closed_fg']
+
+    #print("return event:")
+    #print(event)
     return event
 
 
@@ -274,32 +272,39 @@ def validate_rank(rank):
     return int(ret['total_sheets']) > 0
 
 
-def render_report_csv(reports):
-    reports = sorted(reports, key=lambda x: x['sold_at'])
+def render_report_csv(reports, prefix):
+    #reports = sorted(reports, key=lambda x: x['sold_at'])
 
-    keys = ["reservation_id", "event_id", "rank", "num", "price", "user_id", "sold_at", "canceled_at"]
+    #keys = ["reservation_id", "event_id", "rank", "num", "price", "user_id", "sold_at", "canceled_at"]
 
-    body = []
-    body.append(keys)
-    for report in reports:
-        body.append([report[key] for key in keys])
+    #body = []
+    #body.append(keys)
+    #for report in reports:
+    #    body.append([report[key] for key in keys])
 
-    f = StringIO()
-    writer = csv.writer(f)
-    writer.writerows(body)
-    res = flask.make_response()
-    res.data = f.getvalue()
-    res.headers['Content-Type'] = 'text/csv'
-    res.headers['Content-Disposition'] = 'attachment; filename=report.csv'
-    return res
+    #f = StringIO()
+    #writer = csv.writer(f)
+    #writer.writerows(body)
+    #res = flask.make_response()
+    #res.data = f.getvalue()
+    #res.headers['Content-Type'] = 'text/csv'
+    #res.headers['Content-Disposition'] = 'attachment; filename=report.csv'
+
+    downloadFileName = 'report.csv'
+    downloadFile = '/var/lib/mysql/torb/{}_report.csv'.format(prefix)
+
+    return flask.send_file(downloadFile, as_attachment = True, \
+        attachment_filename = downloadFileName, \
+        mimetype = 'text/csv')
+
+    #return res
 
 
 @app.route('/')
 def get_index():
     user = get_login_user()
     events = []
-    #for event in get_events(lambda e: e["public_fg"]):
-    for event in get_events(True):
+    for event in get_events(lambda e: e["public_fg"]):
         events.append(sanitize_event(event))
     return flask.render_template('index.html', user=user, events=events, base_url=make_base_url(flask.request))
 
@@ -423,8 +428,7 @@ def post_logout():
 @app.route('/api/events')
 def get_events_api():
     events = []
-    #for event in get_events(lambda e: e["public_fg"]):
-    for event in get_events(True):
+    for event in get_events(lambda e: e["public_fg"]):
         events.append(sanitize_event(event))
     return jsonify(events)
 
@@ -637,30 +641,32 @@ def post_event_edit(event_id):
 @app.route('/admin/api/reports/events/<int:event_id>/sales')
 @admin_login_required
 def get_admin_event_sales(event_id):
+    prefix = str(uuid.uuid4())
     event = get_event(event_id)
 
     cur = dbh().cursor()
     reservations = cur.execute("""
-    SELECT
+    SELECT 'reservation_id', 'event_id', 'rank', 'num', 'price', 'user_id', 'sold_at', 'canceled_at' union
+    (SELECT
         r.id as reservation_id
         ,e.id    AS event_id
         ,s.rank  AS rank
         ,s.num   AS num
-        ,r.user_id as user_id
-        ,(CASE
-            WHEN NULL THEN ''
-            ELSE DATE_FORMAT(r.canceled_at, '%Y-%m-%dT%H:%i:%s.%fZ')
-            END )as canceled_at
-        ,DATE_FORMAT(r.reserved_at, '%Y-%m-%dT%H:%i:%s.%fZ') as sold_at
         ,e.price + s.price AS price
+        ,r.user_id as user_id
+        ,DATE_FORMAT(r.reserved_at, '%Y-%m-%dT%H:%i:%s.%fZ') as sold_at
+        ,IFNULL(DATE_FORMAT(r.canceled_at, '%Y-%m-%dT%H:%i:%s.%fZ'), '') as canceled_at
+    INTO OUTFILE '{0}_report.csv'
+    FIELDS TERMINATED BY ','
+    LINES TERMINATED BY '\n'
     FROM reservations r
     INNER JOIN sheets s
     ON s.id = r.sheet_id
     INNER JOIN events e
     ON e.id = r.event_id
-    WHERE r.event_id = {0}
-    ORDER BY reserved_at ASC FOR UPDATE
-    """.format(event['id']))
+    WHERE r.event_id = {1}
+    ORDER BY reserved_at ASC);
+    """.format(prefix,event['id']))
     reservations = cur.fetchall()
     #reports = []
 
@@ -679,61 +685,54 @@ def get_admin_event_sales(event_id):
 #            "price":          reservation['event_price'] + reservation['sheet_price'],
 #        })
 
-    return render_report_csv(reservations)
+    return render_report_csv(reservations, prefix)
 
 
 @app.route('/admin/api/reports/sales')
 @admin_login_required
 def get_admin_sales():
+    prefix = str(uuid.uuid4())
     cur = dbh().cursor()
     reservations = cur.execute('''
-    SELECT
-        r.id as reservation_id
-        ,e.id    AS event_id
-        ,s.rank  AS rank
-        ,s.num   AS num
-        ,r.user_id as user_id
-        ,(CASE
-            WHEN NULL THEN ''
-            ELSE DATE_FORMAT(r.canceled_at, '%Y-%m-%dT%H:%i:%s.%fZ')
-            END )as canceled_at
-        ,DATE_FORMAT(r.reserved_at, '%Y-%m-%dT%H:%i:%s.%fZ') as sold_at
-        ,e.price + s.price AS price
-    FROM reservations r
-    INNER JOIN sheets s
-    ON s.id = r.sheet_id
-    INNER JOIN events e
-    ON e.id = r.event_id
-    ORDER BY reserved_at ASC FOR UPDATE
-    ''')
+      SELECT 'reservation_id', 'event_id', 'rank', 'num', 'price', 'user_id', 'sold_at', 'canceled_at' union
+      (SELECT
+          r.id as reservation_id
+          ,e.id    AS event_id
+          ,s.rank  AS rank
+          ,s.num   AS num
+          ,e.price + s.price AS price
+          ,r.user_id as user_id
+          ,DATE_FORMAT(r.reserved_at, '%Y-%m-%dT%H:%i:%s.%fZ') as sold_at
+          ,IFNULL(DATE_FORMAT(r.canceled_at, '%Y-%m-%dT%H:%i:%s.%fZ'), '') as canceled_at
+      INTO OUTFILE '{}_report.csv'
+      FIELDS TERMINATED BY ','
+      LINES TERMINATED BY '\n'
+      FROM reservations r
+      INNER JOIN sheets s
+      ON s.id = r.sheet_id
+      INNER JOIN events e
+      ON e.id = r.event_id
+      ORDER BY reserved_at ASC);
+    '''.format(prefix))
     reservations = cur.fetchall()
 
-#    reports = []
-#    for reservation in reservations:
-#        if reservation['canceled_at']:
-#            canceled_at = reservation['canceled_at'].isoformat()+"Z"
-#        else: canceled_at = ''
-#        reports.append({
-#            "reservation_id": reservation['id'],
-#            "event_id":       reservation['event_id'],
-#            "rank":           reservation['sheet_rank'],
-#            "num":            reservation['sheet_num'],
-#            "user_id":        reservation['user_id'],
-#            "sold_at":        reservation['reserved_at'].isoformat()+"Z",
-#            "canceled_at":    canceled_at,
-#            "price":          reservation['event_price'] + reservation['sheet_price'],
-#        })
-    return render_report_csv(reservations)
+    #reports = []
+    #for reservation in reservations:
+    #    if reservation['canceled_at']:
+    #        canceled_at = reservation['canceled_at'].isoformat()+"Z"
+    #    else: canceled_at = ''
+    #    reports.append({
+    #        "reservation_id": reservation['id'],
+    #        "event_id":       reservation['event_id'],
+    #        "rank":           reservation['sheet_rank'],
+    #        "num":            reservation['sheet_num'],
+    #        "user_id":        reservation['user_id'],
+    #        "sold_at":        reservation['reserved_at'].isoformat()+"Z",
+    #        "canceled_at":    canceled_at,
+    #        "price":          reservation['event_price'] + reservation['sheet_price'],
+    #    })
+    return render_report_csv(reservations, prefix)
 
-#from wsgi_lineprof.middleware import LineProfilerMiddleware
-#from wsgi_lineprof.filters import FilenameFilter, TotalTimeSorter
-#f=open("/home/isucon/profile.log", "a")
-#filters = [
-#    FilenameFilter("/home/isucon/torb/webapp/python/app.py"),  # プロファイル対象のファイル名指定
-#    lambda stats: filter(lambda stat: stat.total_time > 0.01, stats), # 0.01未満の結果を表示しない
-#]
-#app = LineProfilerMiddleware(app, stream=f, filters=filters)
-#
 
 if __name__ == "__main__":
-    app.run(port=8080, debug=False, threaded=True)
+    app.run(port=8080, debug=True, threaded=True)
