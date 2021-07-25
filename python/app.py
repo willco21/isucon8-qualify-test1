@@ -178,12 +178,10 @@ def get_event(event_id, login_user_id=None):
     cur.execute("""
     SELECT *
     FROM sheets s
-    left outer join reservations r on s.id = r.sheet_id
+    join reservations r on s.id = r.sheet_id
     where
       r.event_id = %s
       AND r.canceled_at IS NULL
-    GROUP BY r.event_id, r.sheet_id HAVING r.reserved_at = MIN(r.reserved_at)
-    ORDER BY s.`rank`,s.num
     """,[event["id"]])
     temp_reservations = cur.fetchall()
     reservations = {}
