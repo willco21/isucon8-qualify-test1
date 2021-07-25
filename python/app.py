@@ -478,6 +478,16 @@ def get_events_by_id(event_id):
     event = sanitize_event(event)
     return jsonify(event)
 
+def simple_get_event(event_id):
+    cur = dbh().cursor()
+    cur.execute("SELECT * FROM events WHERE id =%s",[event_id])
+    event = cur.fetchone()
+    if event:
+        event['public'] = True if event['public_fg'] else False
+        event['closed'] = True if event['closed_fg'] else False
+        del event['public_fg']
+        del event['closed_fg']
+    return event
 
 @app.route('/api/events/<int:event_id>/actions/reserve', methods=['POST'])
 @login_required
@@ -485,7 +495,7 @@ def post_reserve(event_id):
     rank = flask.request.json["sheet_rank"]
 
     user = get_login_user()
-    event = get_event(event_id, user['id'])
+    event = simple_get_event(event_id)
 
     if not event or not event['public']:
         return res_error("invalid_event", 404)
@@ -538,7 +548,7 @@ def post_reserve(event_id):
 @login_required
 def delete_reserve(event_id, rank, num):
     user = get_login_user()
-    event = get_event(event_id, user['id'])
+    event = simple_get_event(event_id)
 
     if not event or not event['public']:
         return res_error("invalid_event", 404)
@@ -659,7 +669,7 @@ def post_admin_events_api():
 @app.route('/admin/api/events/<int:event_id>')
 @admin_login_required
 def get_admin_events_by_id(event_id):
-    event = get_event(event_id)
+    event = simple_get_event(event_id)
     if not event:
         return res_error("not_found", 404)
     return jsonify(event)
@@ -672,7 +682,7 @@ def post_event_edit(event_id):
     closed = flask.request.json['closed'] if 'closed' in flask.request.json.keys() else False
     if closed: public = False
 
-    event = get_event(event_id)
+    event = simple_get_event(event_id)
     if not event:
         return res_error("not_found", 404)
 
@@ -698,7 +708,7 @@ def post_event_edit(event_id):
 @admin_login_required
 def get_admin_event_sales(event_id):
     prefix = str(uuid.uuid4())
-    event = get_event(event_id)
+    event = simple_get_event(event_id)
 
     cur = dbh().cursor()
     reservations = cur.execute("""
