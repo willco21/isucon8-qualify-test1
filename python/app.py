@@ -95,7 +95,7 @@ def teardown(error):
         flask.g.db.close()
 
 
-def get_events(filter=lambda e: True):
+def get_events(filter=lambda e: True, public_fg=False):
     conn = dbh()
     conn.autocommit(False)
 
@@ -104,14 +104,23 @@ def get_events(filter=lambda e: True):
         cur.execute("SELECT * FROM events ORDER BY id ASC")
         rows = cur.fetchall()
         events = [row for row in rows if filter(row)]
-
-        cur.execute("""
-        select count(*) as res_count, r.event_id, s.rank
-        from reservations r
-        join sheets s on r.sheet_id = s.id
-        where r.canceled_at IS NULL
-        GROUP BY r.event_id, s.`rank`;
-        """)
+        if public_fg:
+            cur.execute("""
+            select count(*) as res_count, r.event_id, s.rank
+            from reservations r
+            join sheets s on r.sheet_id = s.id
+            join events e on r.event_id = e.id
+            where r.canceled_at IS NULL AND e.public_fg = 1
+            GROUP BY r.event_id, s.`rank`;
+            """)
+        else:
+            cur.execute("""
+            select count(*) as res_count, r.event_id, s.rank
+            from reservations r
+            join sheets s on r.sheet_id = s.id
+            where r.canceled_at IS NULL
+            GROUP BY r.event_id, s.`rank`;
+            """)
         res_counts = cur.fetchall()
         res_counts_by_event_id_and_rank = {}
 
@@ -305,7 +314,7 @@ def render_report_csv(reports, prefix):
 def get_index():
     user = get_login_user()
     events = []
-    for event in get_events(lambda e: e["public_fg"]):
+    for event in get_events(lambda e: e["public_fg"], public_fg=True):
         events.append(sanitize_event(event))
     return flask.render_template('index.html', user=user, events=events, base_url=make_base_url(flask.request))
 
@@ -452,7 +461,7 @@ def post_logout():
 @app.route('/api/events')
 def get_events_api():
     events = []
-    for event in get_events(lambda e: e["public_fg"]):
+    for event in get_events(lambda e: e["public_fg"], public_fg=True):
         events.append(sanitize_event(event))
     return jsonify(events)
 
